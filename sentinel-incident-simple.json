@@ -117,6 +117,60 @@
                                 ]
                             }
                         },
+                        "Extract_alerts": {
+                            "type": "Http",
+                            "inputs": {
+                                "method": "POST",
+                                "uri": "https://management.azure.com/subscriptions/082909d8-d042-4ef9-99f9-dd4a4ed283de/resourceGroups/test_sentinel_rg/providers/Microsoft.OperationalInsights/workspaces/testsentinel1203/providers/Microsoft.SecurityInsights/incidents/@{variables('IncidentID')}/alerts",
+                                "queries": {
+                                    "api-version": "2023-02-01"
+                                },
+                                "authentication": {
+                                    "type": "ManagedServiceIdentity",
+                                    "audience": "https://management.azure.com/"
+                                }
+                            },
+                            "runAfter": {
+                                "Extract_incident_severity": [
+                                    "Succeeded"
+                                ]
+                            }
+                        },
+                        "Process_alert_names": {
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "AlertNames",
+                                        "type": "array",
+                                        "value": []
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "Extract_alerts": [
+                                    "Succeeded"
+                                ]
+                            }
+                        },
+                        "Parse_alert_details": {
+                            "type": "Select",
+                            "inputs": {
+                                "from": "@body('Extract_alerts')?['value']",
+                                "select": {
+                                    "alertName": "@item()?['properties']?['alertDisplayName']",
+                                    "alertSeverity": "@item()?['properties']?['severity']",
+                                    "alertStatus": "@item()?['properties']?['status']",
+                                    "productName": "@item()?['properties']?['productName']",
+                                    "alertId": "@item()?['name']"
+                                }
+                            },
+                            "runAfter": {
+                                "Process_alert_names": [
+                                    "Succeeded"
+                                ]
+                            }
+                        },
                         "Output_incident_details": {
                             "type": "Compose",
                             "inputs": {
@@ -128,10 +182,12 @@
                                 "incident_number": "@{body('Call_Sentinel_API')?['properties']?['incidentNumber']}",
                                 "workspace": "testsentinel1203",
                                 "timestamp": "@utcnow()",
-                                "summary": "Incident '@{variables('IncidentName')}' has severity '@{variables('IncidentSeverity')}'"
+                                "summary": "Incident '@{variables('IncidentName')}' has severity '@{variables('IncidentSeverity')}'",
+                                "alerts_count": "@length(body('Extract_alerts')?['value'])",
+                                "alerts": "@body('Parse_alert_details')"
                             },
                             "runAfter": {
-                                "Extract_incident_severity": [
+                                "Parse_alert_details": [
                                     "Succeeded"
                                 ]
                             }
