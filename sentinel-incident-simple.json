@@ -162,7 +162,9 @@
                                     "alertSeverity": "@item()?['properties']?['severity']",
                                     "alertStatus": "@item()?['properties']?['status']",
                                     "productName": "@item()?['properties']?['productName']",
-                                    "alertId": "@item()?['name']"
+                                    "alertId": "@item()?['name']",
+                                    "alertType": "@item()?['properties']?['alertType']",
+                                    "systemAlertId": "@item()?['properties']?['systemAlertId']"
                                 }
                             },
                             "runAfter": {
@@ -171,10 +173,109 @@
                                 ]
                             }
                         },
+                        "Get_alert_rules_with_KQL": {
+                            "type": "Foreach",
+                            "foreach": "@body('Parse_alert_details')",
+                            "actions": {
+                                "Get_alert_rule_details": {
+                                    "type": "Http",
+                                    "inputs": {
+                                        "method": "GET",
+                                        "uri": "https://management.azure.com/subscriptions/082909d8-d042-4ef9-99f9-dd4a4ed283de/resourceGroups/test_sentinel_rg/providers/Microsoft.OperationalInsights/workspaces/testsentinel1203/providers/Microsoft.SecurityInsights/alertRules",
+                                        "queries": {
+                                            "api-version": "2023-02-01",
+                                            "$filter": "contains(displayName,'@{items('Get_alert_rules_with_KQL')?['alertName']}')"
+                                        },
+                                        "authentication": {
+                                            "type": "ManagedServiceIdentity",
+                                            "audience": "https://management.azure.com/"
+                                        }
+                                    },
+                                    "runAfter": {}
+                                },
+                                "Extract_KQL_query": {
+                                    "type": "Compose",
+                                    "inputs": {
+                                        "alertName": "@items('Get_alert_rules_with_KQL')?['alertName']",
+                                        "alertId": "@items('Get_alert_rules_with_KQL')?['alertId']",
+                                        "alertSeverity": "@items('Get_alert_rules_with_KQL')?['alertSeverity']",
+                                        "alertStatus": "@items('Get_alert_rules_with_KQL')?['alertStatus']",
+                                        "productName": "@items('Get_alert_rules_with_KQL')?['productName']",
+                                        "alertRuleResponse": "@body('Get_alert_rule_details')",
+                                        "kqlQuery": "@if(and(contains(body('Get_alert_rule_details'), 'value'), greater(length(body('Get_alert_rule_details')?['value']), 0)), coalesce(body('Get_alert_rule_details')?['value'][0]?['properties']?['query'], 'Query field not found in rule properties'), 'KQL query not found - this may be a built-in or external alert')",
+                                        "ruleName": "@if(and(contains(body('Get_alert_rule_details'), 'value'), greater(length(body('Get_alert_rule_details')?['value']), 0)), coalesce(body('Get_alert_rule_details')?['value'][0]?['properties']?['displayName'], 'Display name not found'), 'Rule not found')",
+                                        "ruleDescription": "@if(and(contains(body('Get_alert_rule_details'), 'value'), greater(length(body('Get_alert_rule_details')?['value']), 0)), coalesce(body('Get_alert_rule_details')?['value'][0]?['properties']?['description'], 'Description not available'), 'Description not available')"
+                                    },
+                                    "runAfter": {
+                                        "Get_alert_rule_details": [
+                                            "Succeeded"
+                                        ]
+                                    }
+                                },
+                                "Run_KQL_query": {
+                                    "type": "Http",
+                                    "inputs": {
+                                        "method": "POST",
+                                        "uri": "https://management.azure.com/subscriptions/082909d8-d042-4ef9-99f9-dd4a4ed283de/resourceGroups/test_sentinel_rg/providers/Microsoft.OperationalInsights/workspaces/testsentinel1203/query",
+                                        "queries": {
+                                            "api-version": "2017-10-01"
+                                        },
+                                        "headers": {
+                                            "Content-Type": "application/json"
+                                        },
+                                        "body": {
+                                            "query": "@{if(and(not(equals(outputs('Extract_KQL_query')?['kqlQuery'], 'KQL query not found - this may be a built-in or external alert')), not(empty(outputs('Extract_KQL_query')?['kqlQuery']))), concat(trim(outputs('Extract_KQL_query')?['kqlQuery']), ' | limit 10'), 'print \"No KQL query available for this alert\"')}",
+                                            "timespan": "P7D"
+                                        },
+                                        "authentication": {
+                                            "type": "ManagedServiceIdentity",
+                                            "audience": "https://management.azure.com/"
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Extract_KQL_query": [
+                                            "Succeeded"
+                                        ]
+                                    }
+                                },
+                                "Process_KQL_results": {
+                                    "type": "Compose",
+                                    "inputs": {
+                                        "alertName": "@outputs('Extract_KQL_query')?['alertName']",
+                                        "alertId": "@outputs('Extract_KQL_query')?['alertId']",
+                                        "alertSeverity": "@outputs('Extract_KQL_query')?['alertSeverity']",
+                                        "alertStatus": "@outputs('Extract_KQL_query')?['alertStatus']",
+                                        "productName": "@outputs('Extract_KQL_query')?['productName']",
+                                        "kqlQuery": "@outputs('Extract_KQL_query')?['kqlQuery']",
+                                        "ruleName": "@outputs('Extract_KQL_query')?['ruleName']",
+                                        "ruleDescription": "@outputs('Extract_KQL_query')?['ruleDescription']",
+                                        "queryResults": {
+                                            "rowCount": "@if(contains(body('Run_KQL_query'), 'tables'), length(first(body('Run_KQL_query')?['tables'])?['rows']), 0)",
+                                            "columns": "@if(contains(body('Run_KQL_query'), 'tables'), first(body('Run_KQL_query')?['tables'])?['columns'], createArray())",
+                                            "data": "@if(contains(body('Run_KQL_query'), 'tables'), first(body('Run_KQL_query')?['tables'])?['rows'], createArray())",
+                                            "executionTime": "@if(contains(body('Run_KQL_query'), 'statistics'), body('Run_KQL_query')?['statistics']?['query']?['executionTime'], 'N/A')",
+                                            "queryStatus": "@if(contains(body('Run_KQL_query'), 'error'), 'Failed', 'Success')",
+                                            "errorMessage": "@if(contains(body('Run_KQL_query'), 'error'), body('Run_KQL_query')?['error']?['message'], null)"
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Run_KQL_query": [
+                                            "Succeeded",
+                                            "Failed"
+                                        ]
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Parse_alert_details": [
+                                    "Succeeded"
+                                ]
+                            }
+                        },
                         "Output_incident_details": {
                             "type": "Compose",
                             "inputs": {
-                                "message": "🚨 Sentinel Incident Details Retrieved",
+                                "message": "🚨 Sentinel Incident Details Retrieved with KQL Results",
                                 "incident_id": "@variables('IncidentID')",
                                 "incident_name": "@variables('IncidentName')",
                                 "incident_severity": "@variables('IncidentSeverity')",
@@ -184,10 +285,10 @@
                                 "timestamp": "@utcnow()",
                                 "summary": "Incident '@{variables('IncidentName')}' has severity '@{variables('IncidentSeverity')}'",
                                 "alerts_count": "@length(body('Extract_alerts')?['value'])",
-                                "alerts": "@body('Parse_alert_details')"
+                                "alerts_with_kql_results": "@body('Get_alert_rules_with_KQL')"
                             },
                             "runAfter": {
-                                "Parse_alert_details": [
+                                "Get_alert_rules_with_KQL": [
                                     "Succeeded"
                                 ]
                             }
